@@ -1,5 +1,6 @@
 import cv2
 import pytesseract
+from pytesseract import Output
 import matplotlib.pyplot as plt
 import numpy as np
 import sys
@@ -91,6 +92,44 @@ def build_lines(col_pos, row_pos):
     return hor_lines, ver_lines
 
 
+def cell_positions(col_pos, row_pos):
+
+    n = len(row_pos)-1
+    m = len(col_pos)-1
+    cells = np.zeros((n,m,4), dtype=int)
+
+    for r in range(n):
+        for c in range(m):
+            x1, x2 = col_pos[c], col_pos[c+1]
+            y1, y2 = row_pos[r], row_pos[r+1]
+            cells[r][c] = np.array([x1, y1, x2, y2])
+
+    return cells
+
+
+def cell_text(cell_img):
+
+    if np.sum(255 - cell_img) == 0:
+        # this means the image is blank space
+        return 0, ''
+
+    config = '--oem 3 -c tessedit_char_whitelist=.0123456789'
+    data = pytesseract.image_to_data(cell_img, config=config, output_type=Output.DICT)
+    conf, text = data['conf'][-1], data['text'][-1]
+
+    if text == '':
+        config = '--psm 10 --oem 3 -c tessedit_char_whitelist=.0123456789'
+        data = pytesseract.image_to_data(cell_img, config=config, output_type=Output.DICT)
+        conf, text = data['conf'][-1], data['text'][-1]
+
+    if text == '':
+        text = 'still not found'
+        conf = 0
+
+    return conf, text
+
+
+
 if __name__ == "__main__":
     in_file = str(sys.argv[1])
     pre_file = './data/pre.png'
@@ -107,6 +146,9 @@ if __name__ == "__main__":
 
     # Visualize the result
     vis = img.copy()
+    vis = vis*0. + 255
+
+    cells = cell_positions(col_pos, row_pos)
 
 
     for line in hor_lines:
@@ -117,6 +159,19 @@ if __name__ == "__main__":
         [x1, y1, x2, y2] = line
         cv2.line(vis, (x1, y1), (x2, y2), (0, 0, 255), 1)
 
-    print(pytesseract.image_to_string(img))
+    n, m, _ = cells.shape
+    output = np.empty((n,m), dtype=object)
 
-    cv2.imwrite(out_file, vis)
+    for i in range(n):
+        for j in range(m):
+            [x1, y1, x2, y2] = cells[i][j]
+            w = x2 - x1
+            h = y2 - y1
+            cell_img = img[y1:y2,x1:x2]
+            conf, text = cell_text(cell_img)
+            color = (0, 255, 0) if conf > 90 else (0, 0, 255)
+            cv2.putText(vis, text, (x1,y2), cv2.FONT_HERSHEY_PLAIN, 1.0, color)
+            output[i][j] = text
+
+    np.savetxt('table.csv', output, fmt='%s', delimiter='\t')
+    cv2.imwrite(out_file, np.vstack((img, vis)))
