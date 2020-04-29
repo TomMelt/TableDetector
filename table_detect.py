@@ -194,6 +194,26 @@ def draw_table(table, img):
     return img
 
 
+def trim_whitespace(img, threshold=0.01):
+    inverted_img = (255 - img)//255
+    y = np.sum(inverted_img, axis=0)
+    xa, xb = trim_limits(y, threshold)
+    y = np.sum(inverted_img, axis=1)
+    ya, yb = trim_limits(y, threshold)
+    return img[ya:yb+1, xa:xb+1], xa, ya
+
+
+def trim_limits(y, threshold):
+    y = np.cumsum(y)
+    # lower limit
+    a = np.min(np.argwhere(y>threshold))
+    # upper limit
+    b = np.max(np.argwhere(y[-1]-y>threshold))
+    if b < len(y):
+        b = b+1
+    return a, b
+
+
 def cell_positions(table):
 
     row_pos = table['row_pos']
@@ -267,46 +287,50 @@ def get_cell_img(cell, img):
 
 
 def get_bboxs(cell, method, img):
-
     method = method.lower()
-
-    chars, boundboxes = [], []
-
-    [abs_x1, abs_y1, abs_x2, abs_y2] = cell
-
+    boundboxes = []
+    # store absolute location of cell w.r.t. whole image
+    abs_x1, abs_y1, abs_x2, abs_y2 = cell
     # get image for given cell location
     cell_img = img[abs_y1:abs_y2,abs_x1:abs_x2]
 
-    # pad whitespace around cell
-    pad = 2
-    cell_img = cv2.copyMakeBorder(cell_img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, None, 255)
+    inverted_img = (255 - cell_img)//255
+
+    if np.sum(inverted_img) < 5:
+        return(None)
 
     if method == 'contours':
+        # pad whitespace around cell
+        pad = 2
+        cell_img = cv2.copyMakeBorder(cell_img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, None, 255)
         # find contours
         contours, hierarchy = cv2.findContours(
                 cell_img,
                 cv2.RETR_TREE,
                 cv2.CHAIN_APPROX_SIMPLE
                 )[-2:]
-
         contours, hierarchy = sort_contours(contours, hierarchy)
-
         for k, cnt in enumerate(contours):
             if hierarchy[k][-1] == 0:
                 x, y, w, h = cv2.boundingRect(cnt)
                 x = x + abs_x1 - pad
                 y = y + abs_y1 - pad
                 boundboxes.append([x, y, x+w, y+h])
-
         boundboxes = remove_overlapping_bbox(boundboxes, cutoff=0.6)
 
     elif method == 'histogram':
+        cell_img, xt, yt = trim_whitespace(cell_img)
         table = get_table(
                 cell_img,
-                relative_heights=(0.2,0.1),
+                relative_heights=(0.1,0.2),
                 plateau_sizes=(0,0),
                 debug=False,
                 )
+        boundboxes = cell_positions(table)[0]
+        for i in range(len(boundboxes)):
+            bbox = boundboxes[i]
+            bbox = bbox + np.array([abs_x1+xt, abs_y1+yt, abs_x1+xt, abs_y1+yt])
+            boundboxes[i] = bbox
 
     return boundboxes
 
@@ -405,13 +429,13 @@ def sort_contours(contours, hierarchy, method="left-to-right"):
 if __name__ == "__main__":
     im = 0
     in_file = None
-    try:
-        in_file = str(sys.argv[1])
-    except:
-        os.system('gnome-screenshot -a -f ./data/screenshot.png')
-        pass
+#    try:
+#        in_file = str(sys.argv[1])
+#    except:
+#        os.system('gnome-screenshot -a -f ./data/screenshot.png')
+#        pass
     if in_file is None:
-        in_file = './data/screenshot.png'
+        in_file = './inputs/pre.png.bak'
     out_file = './data/out.png'
 
     img = cv2.imread(in_file)
@@ -424,21 +448,24 @@ if __name__ == "__main__":
 #        plt.title('orig                        '+m)
 #        plt.show()
 
-    table = get_table(
-            modify_img(preprocessed_img, method='dilate', iterations=2),
-            relative_heights=(0.1,0.2),
-            plateau_sizes=(10,10),
-            debug=False,
-            )
-
     preprocessed_img = modify_img(preprocessed_img, method='dilate', iterations=1)
 
     plt.imshow(preprocessed_img)
     plt.show()
 
+    table = get_table(
+            preprocessed_img,
+            relative_heights=(0.1,0.1),
+            plateau_sizes=(10,10),
+            debug=True,
+            )
+
     # Visualize the result
     vis = cv2.cvtColor(preprocessed_img, cv2.COLOR_GRAY2BGR)
     vis = draw_table(table, img=vis)
+
+    plt.imshow(vis)
+    plt.show()
 
     cells = cell_positions(table)
     n, m, _ = cells.shape
@@ -455,7 +482,8 @@ if __name__ == "__main__":
                     method='contours',
                     img=preprocessed_img,
                     )
-            boundboxes.append(bboxs)
+            if bboxs is not None:
+                boundboxes.append(bboxs)
 
     boundboxes = [b for row in boundboxes for b in row]
 
@@ -471,7 +499,7 @@ if __name__ == "__main__":
     chars = normalise_chars(chars)
 
     n = len(chars)
-    print('n = ', n)
+#    print('n = ', n)
 #    n = 50
     chars = chars[:n]
     sim_mat = np.zeros((n,n), dtype=np.float)
@@ -487,9 +515,6 @@ if __name__ == "__main__":
 
     sim_mat = sim_mat + sim_mat.T
 
-    with open('sim_mat.pkl', 'wb') as pklfile:
-        np.save(pklfile, sim_mat)
-
     n_clusters = 11
     clustering = SpectralClustering(
             assign_labels='kmeans',
@@ -501,17 +526,14 @@ if __name__ == "__main__":
     clusters = clustering.labels_
     order = np.argsort(clusters)
     clusters = clusters[order]
-    print('clusters', clusters)
-    print('order   ', order)
+#    print('clusters', clusters)
+#    print('order   ', order)
 
     chars = np.array(chars)
     sim_mat = sim_mat[order]
     sim_mat = sim_mat[:,order]
     chars = chars[order]
     chars = list(chars)
-
-    with open('chars.pkl', 'wb') as pklfile:
-        np.save(pklfile, chars)
 
 #    col_head = np.vstack(chars)//255
 #    row_head = np.hstack([chars[0]*0.]+chars)//255
