@@ -45,6 +45,10 @@ class UiCustomMainWindow(Ui_MainWindow):
 
 
 if __name__ == '__main__':
+    from pathlib import Path
+
+    Path('./data').mkdir(parents=True, exist_ok=True)
+
     app = QtWidgets.QApplication(sys.argv)
     mainwindow = QtWidgets.QMainWindow()
     ui = UiCustomMainWindow()

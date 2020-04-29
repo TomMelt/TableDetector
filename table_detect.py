@@ -427,6 +427,10 @@ def sort_contours(contours, hierarchy, method="left-to-right"):
 
 
 if __name__ == "__main__":
+    from pathlib import Path
+
+    Path('./data').mkdir(parents=True, exist_ok=True)
+
     im = 0
     in_file = None
 #    try:
